@@ -4,13 +4,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from .config import settings
 from .database import Base, engine
 from .routers import enterprises, vehicle_models, credit_records, credit_transactions, statistics
-from .routers import credit_market, credit_carryover, credit_prediction
+from .routers import credit_market, credit_carryover, credit_prediction, group_declarations
 
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI(
     title=settings.APP_NAME,
-    description="工信部双积分核算与电耗限值管理系统 - 用于管理新能源汽车企业双积分核算、电耗限值标准、积分交易撮合等业务。新增功能：积分交易市场（挂单交易、价格走势）、跨年度结转、积分预测。",
+    description="工信部双积分核算与电耗限值管理系统 - 用于管理新能源汽车企业双积分核算、电耗限值标准、积分交易撮合等业务。新增功能：积分交易市场（挂单交易、价格走势）、跨年度结转、积分预测、集团统一申报（成员封账版本、合并抵销、版本差异、层级勾稽）。",
     version=settings.VERSION,
     docs_url="/docs",
     redoc_url="/redoc"
@@ -32,6 +32,7 @@ app.include_router(statistics.router, prefix=settings.API_V1_PREFIX)
 app.include_router(credit_market.router, prefix=settings.API_V1_PREFIX)
 app.include_router(credit_carryover.router, prefix=settings.API_V1_PREFIX)
 app.include_router(credit_prediction.router, prefix=settings.API_V1_PREFIX)
+app.include_router(group_declarations.router, prefix=settings.API_V1_PREFIX)
 
 
 @app.get("/", tags=["root"])

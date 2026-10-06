@@ -30,6 +30,26 @@ class CarryoverStatus(str, enum.Enum):
     REJECTED = "rejected"
 
 
+class DeclarationStatus(str, enum.Enum):
+    SEALED = "sealed"
+    SUPERSEDED = "superseded"
+
+
+class ConsolidationStatus(str, enum.Enum):
+    GENERATED = "generated"
+    ADOPTED = "adopted"
+    SUPERSEDED = "superseded"
+
+
+class ConsolidationReason(str, enum.Enum):
+    INITIAL = "initial"
+    LATE_SUBMISSION = "late_submission"
+    MEMBER_EXIT = "member_exit"
+    CORRECTION = "correction"
+    SCOPE_CHANGE = "scope_change"
+    OTHER = "other"
+
+
 class Enterprise(Base):
     __tablename__ = "enterprises"
 
@@ -236,3 +256,164 @@ class AnnualCreditSummary(Base):
     __table_args__ = (
         {'sqlite_autoincrement': True},
     )
+
+
+class EnterpriseGroup(Base):
+    __tablename__ = "enterprise_groups"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(100), unique=True, nullable=False, index=True, comment="集团名称")
+    group_code = Column(String(50), unique=True, index=True, comment="集团编码")
+    remark = Column(String(500))
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    memberships = relationship("GroupMembership", back_populates="group")
+    declarations = relationship("MemberDeclaration", back_populates="group")
+    consolidations = relationship("GroupConsolidation", back_populates="group")
+
+
+class GroupMembership(Base):
+    __tablename__ = "group_memberships"
+
+    id = Column(Integer, primary_key=True, index=True)
+    group_id = Column(Integer, ForeignKey("enterprise_groups.id"), nullable=False)
+    enterprise_id = Column(Integer, ForeignKey("enterprises.id"), nullable=False)
+    effective_from_year = Column(Integer, nullable=False, comment="成员生效起始年度")
+    effective_to_year = Column(Integer, comment="成员生效截止年度(空表示仍在集团内)")
+    remark = Column(String(500))
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    group = relationship("EnterpriseGroup", back_populates="memberships")
+    enterprise = relationship("Enterprise")
+
+
+class MemberDeclaration(Base):
+    """成员企业封账申报版本：提交即封账，更正产生新版本，旧版本置为 superseded 不改写"""
+    __tablename__ = "member_declarations"
+
+    id = Column(Integer, primary_key=True, index=True)
+    group_id = Column(Integer, ForeignKey("enterprise_groups.id"), nullable=False)
+    enterprise_id = Column(Integer, ForeignKey("enterprises.id"), nullable=False)
+    year = Column(Integer, nullable=False, comment="申报年度")
+    version_no = Column(Integer, nullable=False, comment="成员申报版本号(按集团+企业+年度递增)")
+    status = Column(Enum(DeclarationStatus), default=DeclarationStatus.SEALED, nullable=False)
+    total_positive_credit = Column(Float, default=0.0, comment="封账时当年正积分")
+    total_negative_credit = Column(Float, default=0.0, comment="封账时当年负积分")
+    net_credit = Column(Float, default=0.0, comment="封账时当年净积分")
+    carryover_in = Column(Float, default=0.0, comment="封账时上年结转积分")
+    carryover_out = Column(Float, default=0.0, comment="封账时结转下年积分")
+    bought_credit = Column(Float, default=0.0, comment="封账时买入积分合计")
+    sold_credit = Column(Float, default=0.0, comment="封账时卖出积分合计")
+    internal_bought_credit = Column(Float, default=0.0, comment="其中集团内部买入")
+    internal_sold_credit = Column(Float, default=0.0, comment="其中集团内部卖出")
+    external_bought_credit = Column(Float, default=0.0, comment="其中集团外部买入")
+    external_sold_credit = Column(Float, default=0.0, comment="其中集团外部卖出")
+    final_net_credit = Column(Float, default=0.0, comment="封账时最终净积分")
+    credit_gap = Column(Float, default=0.0, comment="封账时积分缺口")
+    credit_surplus = Column(Float, default=0.0, comment="封账时积分钟余")
+    is_compliant = Column(Boolean, default=True, comment="封账时是否达标")
+    remark = Column(String(500))
+    sealed_at = Column(DateTime, default=datetime.utcnow, comment="封账时间")
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    group = relationship("EnterpriseGroup", back_populates="declarations")
+    enterprise = relationship("Enterprise")
+    transactions = relationship("MemberDeclarationTransaction", back_populates="declaration")
+
+
+class MemberDeclarationTransaction(Base):
+    """封账版本纳入的交易快照：保留成员双方原始交易记录，供合并版本抵销核对"""
+    __tablename__ = "member_declaration_transactions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    declaration_id = Column(Integer, ForeignKey("member_declarations.id"), nullable=False)
+    transaction_id = Column(Integer, ForeignKey("credit_transactions.id"), nullable=False, comment="原始交易ID")
+    transaction_no = Column(String(50), comment="原始交易编号")
+    counterparty_enterprise_id = Column(Integer, ForeignKey("enterprises.id"), nullable=False, comment="交易对手企业ID")
+    direction = Column(String(10), nullable=False, comment="方向：buy买入/sell卖出")
+    credit_amount = Column(Float, nullable=False, comment="交易积分数量")
+    is_internal = Column(Boolean, default=False, comment="封账时是否为集团内部交易")
+    transaction_year = Column(Integer, nullable=False, comment="交易发生年度")
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    declaration = relationship("MemberDeclaration", back_populates="transactions")
+    original_transaction = relationship("CreditTransaction")
+
+
+class GroupConsolidation(Base):
+    """集团合并申报版本：抵销项目仅属于本版本；已采用版本不可改写，更正只产生新版本"""
+    __tablename__ = "group_consolidations"
+
+    id = Column(Integer, primary_key=True, index=True)
+    group_id = Column(Integer, ForeignKey("enterprise_groups.id"), nullable=False)
+    year = Column(Integer, nullable=False, comment="合并申报年度")
+    version_no = Column(Integer, nullable=False, comment="合并版本号(按集团+年度递增)")
+    status = Column(Enum(ConsolidationStatus), default=ConsolidationStatus.GENERATED, nullable=False)
+    reason = Column(String(30), default=ConsolidationReason.INITIAL.value, comment="版本形成原因")
+    previous_version_id = Column(Integer, ForeignKey("group_consolidations.id"), comment="上一合并版本ID")
+    member_count = Column(Integer, default=0, comment="纳入合并的成员数")
+    total_positive_credit = Column(Float, default=0.0, comment="合并正积分合计")
+    total_negative_credit = Column(Float, default=0.0, comment="合并负积分合计")
+    net_credit = Column(Float, default=0.0, comment="合并当年净积分")
+    carryover_in = Column(Float, default=0.0, comment="合并上年结转(不抵销)")
+    carryover_out = Column(Float, default=0.0, comment="合并结转下年(不抵销)")
+    eliminated_internal_bought = Column(Float, default=0.0, comment="抵销的内部买入合计")
+    eliminated_internal_sold = Column(Float, default=0.0, comment="抵销的内部卖出合计")
+    eliminated_amount = Column(Float, default=0.0, comment="抵销项目金额合计(按交易去重)")
+    external_bought_credit = Column(Float, default=0.0, comment="抵销后集团外部买入")
+    external_sold_credit = Column(Float, default=0.0, comment="抵销后集团外部卖出")
+    final_net_credit = Column(Float, default=0.0, comment="合并最终净积分")
+    credit_gap = Column(Float, default=0.0, comment="合并积分缺口")
+    credit_surplus = Column(Float, default=0.0, comment="合并积分钟余")
+    is_compliant = Column(Boolean, default=True, comment="合并后是否达标")
+    change_summary = Column(Text, comment="与上一版本的成员及金额差异说明(JSON)")
+    remark = Column(String(500))
+    created_at = Column(DateTime, default=datetime.utcnow)
+    adopted_at = Column(DateTime, comment="监管采用时间")
+
+    group = relationship("EnterpriseGroup", back_populates="consolidations")
+    members = relationship("GroupConsolidationMember", back_populates="consolidation")
+    eliminations = relationship("GroupElimination", back_populates="consolidation")
+
+
+class GroupConsolidationMember(Base):
+    """合并版本纳入的成员范围：指向成员封账版本的不可变快照"""
+    __tablename__ = "group_consolidation_members"
+
+    id = Column(Integer, primary_key=True, index=True)
+    consolidation_id = Column(Integer, ForeignKey("group_consolidations.id"), nullable=False)
+    declaration_id = Column(Integer, ForeignKey("member_declarations.id"), nullable=False)
+    enterprise_id = Column(Integer, ForeignKey("enterprises.id"), nullable=False)
+    declaration_version_no = Column(Integer, nullable=False, comment="纳入的成员申报版本号")
+    final_net_credit = Column(Float, default=0.0, comment="成员封账最终净积分")
+    credit_gap = Column(Float, default=0.0, comment="成员封账缺口")
+    credit_surplus = Column(Float, default=0.0, comment="成员封账钟余")
+    is_compliant = Column(Boolean, default=True, comment="成员封账是否达标")
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    consolidation = relationship("GroupConsolidation", back_populates="members")
+    declaration = relationship("MemberDeclaration")
+    enterprise = relationship("Enterprise")
+
+
+class GroupElimination(Base):
+    """集团内部交易抵销项目：仅属于生成它的合并版本，原始交易双方记录保留不改写"""
+    __tablename__ = "group_eliminations"
+
+    id = Column(Integer, primary_key=True, index=True)
+    consolidation_id = Column(Integer, ForeignKey("group_consolidations.id"), nullable=False)
+    transaction_id = Column(Integer, ForeignKey("credit_transactions.id"), nullable=False, comment="被抵销的原始内部交易ID")
+    transaction_no = Column(String(50), comment="被抵销的原始交易编号")
+    from_enterprise_id = Column(Integer, ForeignKey("enterprises.id"), nullable=False, comment="转出成员企业ID")
+    to_enterprise_id = Column(Integer, ForeignKey("enterprises.id"), nullable=False, comment="转入成员企业ID")
+    credit_amount = Column(Float, nullable=False, comment="原始交易积分数量")
+    eliminated_amount = Column(Float, nullable=False, comment="抵销积分数量")
+    captured_by_from = Column(Boolean, default=True, comment="转出方封账版本是否已含该交易")
+    captured_by_to = Column(Boolean, default=True, comment="转入方封账版本是否已含该交易")
+    remark = Column(String(500))
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    consolidation = relationship("GroupConsolidation", back_populates="eliminations")
+    original_transaction = relationship("CreditTransaction")

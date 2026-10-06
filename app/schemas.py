@@ -2,7 +2,15 @@ from typing import List, Optional
 from datetime import datetime
 from pydantic import BaseModel, Field
 
-from .models import CreditRecordStatus, OrderType, OrderStatus, CarryoverStatus
+from .models import (
+    CreditRecordStatus,
+    OrderType,
+    OrderStatus,
+    CarryoverStatus,
+    DeclarationStatus,
+    ConsolidationStatus,
+    ConsolidationReason,
+)
 
 
 class EnterpriseBase(BaseModel):
@@ -516,3 +524,208 @@ class CarryoverSummaryResponse(BaseModel):
 
 
 CreditOrderWithDetail.model_rebuild()
+
+
+# ============ 集团统一申报 ============
+
+class EnterpriseGroupBase(BaseModel):
+    name: str = Field(..., max_length=100, description="集团名称")
+    group_code: Optional[str] = Field(None, max_length=50, description="集团编码")
+    remark: Optional[str] = Field(None, max_length=500)
+
+
+class EnterpriseGroupCreate(EnterpriseGroupBase):
+    pass
+
+
+class EnterpriseGroup(EnterpriseGroupBase):
+    id: int
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class GroupMembershipBase(BaseModel):
+    enterprise_id: int = Field(..., description="成员企业ID")
+    effective_from_year: int = Field(..., description="成员生效起始年度")
+    effective_to_year: Optional[int] = Field(None, description="成员生效截止年度(空表示仍在集团内)")
+    remark: Optional[str] = Field(None, max_length=500)
+
+
+class GroupMembershipCreate(GroupMembershipBase):
+    pass
+
+
+class GroupMembershipUpdate(BaseModel):
+    effective_from_year: Optional[int] = None
+    effective_to_year: Optional[int] = None
+    remark: Optional[str] = Field(None, max_length=500)
+
+
+class GroupMembership(GroupMembershipBase):
+    id: int
+    group_id: int
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class GroupMembershipWithEnterprise(GroupMembership):
+    enterprise: Optional[Enterprise] = None
+
+    class Config:
+        from_attributes = True
+
+
+class EnterpriseGroupWithMembers(EnterpriseGroup):
+    memberships: List[GroupMembershipWithEnterprise] = []
+
+    class Config:
+        from_attributes = True
+
+
+class MemberDeclarationCreate(BaseModel):
+    enterprise_id: int = Field(..., description="申报成员企业ID")
+    year: int = Field(..., description="申报年度")
+    remark: Optional[str] = Field(None, max_length=500, description="封账说明")
+
+
+class MemberDeclarationTransaction(BaseModel):
+    id: int
+    transaction_id: int
+    transaction_no: Optional[str] = None
+    counterparty_enterprise_id: int
+    direction: str
+    credit_amount: float
+    is_internal: bool
+    transaction_year: int
+
+    class Config:
+        from_attributes = True
+
+
+class MemberDeclaration(BaseModel):
+    id: int
+    group_id: int
+    enterprise_id: int
+    year: int
+    version_no: int
+    status: DeclarationStatus
+    total_positive_credit: float
+    total_negative_credit: float
+    net_credit: float
+    carryover_in: float
+    carryover_out: float
+    bought_credit: float
+    sold_credit: float
+    internal_bought_credit: float
+    internal_sold_credit: float
+    external_bought_credit: float
+    external_sold_credit: float
+    final_net_credit: float
+    credit_gap: float
+    credit_surplus: float
+    is_compliant: bool
+    remark: Optional[str] = None
+    sealed_at: Optional[datetime] = None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class MemberDeclarationWithDetail(MemberDeclaration):
+    enterprise: Optional[Enterprise] = None
+    transactions: List[MemberDeclarationTransaction] = []
+
+    class Config:
+        from_attributes = True
+
+
+class GroupConsolidationGenerate(BaseModel):
+    year: int = Field(..., description="合并申报年度")
+    member_enterprise_ids: Optional[List[int]] = Field(
+        None, description="合并范围成员企业ID列表(空表示全部当年生效成员)"
+    )
+    declaration_ids: Optional[List[int]] = Field(
+        None, description="指定纳入的成员封账版本ID(空表示取各成员最新封账版本)"
+    )
+    reason: Optional[ConsolidationReason] = Field(None, description="版本形成原因")
+    remark: Optional[str] = Field(None, max_length=500)
+
+
+class GroupConsolidationMember(BaseModel):
+    id: int
+    consolidation_id: int
+    declaration_id: int
+    enterprise_id: int
+    declaration_version_no: int
+    final_net_credit: float
+    credit_gap: float
+    credit_surplus: float
+    is_compliant: bool
+
+    class Config:
+        from_attributes = True
+
+
+class GroupElimination(BaseModel):
+    id: int
+    consolidation_id: int
+    transaction_id: int
+    transaction_no: Optional[str] = None
+    from_enterprise_id: int
+    to_enterprise_id: int
+    credit_amount: float
+    eliminated_amount: float
+    captured_by_from: bool
+    captured_by_to: bool
+    remark: Optional[str] = None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class GroupConsolidation(BaseModel):
+    id: int
+    group_id: int
+    year: int
+    version_no: int
+    status: ConsolidationStatus
+    reason: Optional[str] = None
+    previous_version_id: Optional[int] = None
+    member_count: int
+    total_positive_credit: float
+    total_negative_credit: float
+    net_credit: float
+    carryover_in: float
+    carryover_out: float
+    eliminated_internal_bought: float
+    eliminated_internal_sold: float
+    eliminated_amount: float
+    external_bought_credit: float
+    external_sold_credit: float
+    final_net_credit: float
+    credit_gap: float
+    credit_surplus: float
+    is_compliant: bool
+    change_summary: Optional[str] = None
+    remark: Optional[str] = None
+    created_at: datetime
+    adopted_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+class GroupConsolidationWithDetail(GroupConsolidation):
+    members: List[GroupConsolidationMember] = []
+    eliminations: List[GroupElimination] = []
+
+    class Config:
+        from_attributes = True
